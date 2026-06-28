@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meteor Predictor — What you'll actually see</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header>
+  <h1>☄️ Meteor Predictor</h1>
+  <p>Visible ZHR — what you'll actually see from your rooftop, not the theoretical maximum</p>
+</header>
+
+<div class="container">
+
+  <div class="panel">
+    <div class="panel-title">Your Location</div>
+
+    <div class="search-row">
+      <input type="text" id="location-input" placeholder="Type your city, village, or address…" autocomplete="off">
+      <button class="btn-ghost" onclick="searchLocation()">🔍 Search</button>
+      <button class="btn-ghost" onclick="autoDetect()">📍 Auto</button>
+    </div>
+
+    <div class="coords-row" id="coords-row" style="display:none">
+      <div class="coord-chip">Lat <span id="lat-display">—</span></div>
+      <div class="coord-chip">Lon <span id="lon-display">—</span></div>
+    </div>
+
+    <div id="sky-panel">
+      <div class="sky-title">🛰️ Sky Darkness — detected from Falchi 2016 / VIIRS satellite</div>
+      <div class="sky-bortle" id="sky-bortle">—</div>
+      <div class="sky-desc"   id="sky-desc">—</div>
+      <div class="sky-source" id="sky-source">—</div>
+      <div class="sky-error"  id="sky-error" style="display:none"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn-primary" id="predict-btn" onclick="runPrediction()">Predict →</button>
+      <span id="status"></span>
+    </div>
+  </div>
+
+  <div id="error-msg"></div>
+
+  <div id="calendar-row">
+    <button class="btn-cal" onclick="exportCalendar()">📅 Export all peaks to Calendar (.ics)</button>
+  </div>
+
+  <div id="results">
+    <div class="empty">
+      <div class="icon">🌌</div>
+      <p>Search for your location — sky darkness auto-detected from satellite.<br>
+      We account for radiant geometry, light pollution (Falchi 2016 atlas),<br>
+      cloud cover, moon phase, and AQI.</p>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  Sky darkness: <a href="https://www.lightpollutionmap.info" target="_blank">Falchi 2016 / VIIRS via lightpollutionmap.info</a> &nbsp;|&nbsp;
+  Formula: ZHR_obs = ZHR × sin(alt) × r^(lm−6.5) × (1−cloud) — IMO Standard &nbsp;|&nbsp;
+  Weather + AQI: <a href="https://open-meteo.com" target="_blank">Open-Meteo</a> &nbsp;|&nbsp;
+  Showers: <a href="https://www.imo.net" target="_blank">IMO Working List</a> &nbsp;|&nbsp;
+  "Space is big. Really big." — Douglas Adams
+</footer>
+
+<script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
