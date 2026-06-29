@@ -1,6 +1,7 @@
 // ── State ──────────────────────────────────────────────────────────────────────
-let currentLat = null;
-let currentLon = null;
+let currentLat       = null;
+let currentLon       = null;
+let currentPlaceData = null;   // Nominatim place info — used for Bortle fallback
 
 // ── Location Search ────────────────────────────────────────────────────────────
 async function searchLocation () {
@@ -13,10 +14,9 @@ async function searchLocation () {
   try {
     const resp = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
     const data = await resp.json();
-
     if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
 
-    setLocation(data.lat, data.lon);
+    setLocation(data.lat, data.lon, data.place_data);
     document.getElementById('location-input').value = data.name;
     setStatus(`✓ Found: ${data.name}`);
 
@@ -31,16 +31,17 @@ function autoDetect () {
   setStatus("📡 Locating…");
   navigator.geolocation.getCurrentPosition(
     pos => {
-      setLocation(pos.coords.latitude, pos.coords.longitude);
+      setLocation(pos.coords.latitude, pos.coords.longitude, null);
       setStatus("✓ Location detected");
     },
     () => { setStatus(""); showError("Location access denied."); }
   );
 }
 
-function setLocation (lat, lon) {
-  currentLat = lat;
-  currentLon = lon;
+function setLocation (lat, lon, placeData) {
+  currentLat       = lat;
+  currentLon       = lon;
+  currentPlaceData = placeData || null;
   document.getElementById('lat-display').textContent = lat.toFixed(4);
   document.getElementById('lon-display').textContent = lon.toFixed(4);
   document.getElementById('coords-row').style.display = 'flex';
@@ -54,20 +55,25 @@ async function runPrediction () {
   }
 
   clearError();
-  setStatus("⏳ Detecting sky darkness from satellite + fetching forecast…");
+  setStatus("⏳ Detecting sky darkness + fetching forecast…");
   document.getElementById('predict-btn').disabled = true;
   document.getElementById('sky-panel').style.display = 'none';
 
   try {
+    const body = {
+      lat:        currentLat,
+      lon:        currentLon,
+      place_data: currentPlaceData,   // Helps Bortle fallback if VIIRS unavailable
+    };
+
     const resp = await fetch('/api/predict', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ lat: currentLat, lon: currentLon }),
+      body:    JSON.stringify(body),
     });
     if (!resp.ok) { const e = await resp.json(); throw new Error(e.error || `HTTP ${resp.status}`); }
 
     const data = await resp.json();
-
     showSkyPanel(data.sky);
     setStatus(`✓ Bortle ${data.sky.bortle} detected · ${data.showers.length} showers calculated`);
     renderResults(data.showers);
@@ -82,14 +88,14 @@ async function runPrediction () {
 
 // ── Sky Panel ──────────────────────────────────────────────────────────────────
 function showSkyPanel (sky) {
-  document.getElementById('sky-panel').style.display  = 'block';
-  document.getElementById('sky-bortle').textContent   = `Bortle ${sky.bortle} · SQM ${sky.sqm} mag/arcsec²`;
-  document.getElementById('sky-desc').textContent     = sky.description;
-  document.getElementById('sky-source').textContent   = `Source: ${sky.source}`;
+  document.getElementById('sky-panel').style.display = 'block';
+  document.getElementById('sky-bortle').textContent  = `Bortle ${sky.bortle} · SQM ${sky.sqm} mag/arcsec²`;
+  document.getElementById('sky-desc').textContent    = sky.description;
+  document.getElementById('sky-source').textContent  = `Source: ${sky.source}`;
 
   const errEl = document.getElementById('sky-error');
   if (sky.error) {
-    errEl.textContent   = `⚠️ ${sky.error} — using Bortle 5 default`;
+    errEl.textContent   = `⚠️ ${sky.error}`;
     errEl.style.display = 'block';
   } else {
     errEl.style.display = 'none';
@@ -224,8 +230,7 @@ function renderChart (code) {
   const vzhr   = hourly.map(h => h.visible_zhr);
   const cloud  = hourly.map(h => h.cloud_pct ?? 0);
   const aqi    = hourly.map(h => h.aqi ?? 0);
-
-  const ctx = document.getElementById(`chart-${code}`).getContext('2d');
+  const ctx    = document.getElementById(`chart-${code}`).getContext('2d');
 
   charts[code] = new Chart(ctx, {
     type: 'bar',
@@ -233,8 +238,7 @@ function renderChart (code) {
       labels,
       datasets: [
         {
-          label: 'Visible ZHR',
-          data:  vzhr,
+          label: 'Visible ZHR', data: vzhr,
           backgroundColor: vzhr.map(v =>
             v >= 30 ? 'rgba(61,220,132,0.75)'
             : v >= 10 ? 'rgba(245,197,66,0.75)'
@@ -243,7 +247,7 @@ function renderChart (code) {
           borderColor: 'transparent', borderRadius: 4, yAxisID: 'y', order: 1,
         },
         {
-          label: 'Cloud Cover %', data: cloud, type: 'line',
+          label: 'Cloud %', data: cloud, type: 'line',
           borderColor: 'rgba(150,150,220,0.55)', backgroundColor: 'rgba(150,150,220,0.07)',
           borderWidth: 1.5, borderDash: [4,3], pointRadius: 0, fill: true,
           yAxisID: 'y2', order: 0, tension: 0.3,
@@ -268,9 +272,8 @@ function renderChart (code) {
             afterBody: (items) => {
               const h = hourly[items[0].dataIndex];
               return [
-                `  Radiant: ${h.radiant_alt_deg}° alt · ${h.radiant_cardinal} (${h.radiant_az_deg}°)`,
-                `  Moon:    ${h.moon_pct}% illuminated`,
-                `  Eff. lm: ${h.eff_lm}`,
+                `  Radiant: ${h.radiant_alt_deg}° · ${h.radiant_cardinal} (${h.radiant_az_deg}°)`,
+                `  Moon: ${h.moon_pct}% · Eff. lm: ${h.eff_lm}`,
               ];
             },
           },
@@ -278,8 +281,8 @@ function renderChart (code) {
       },
       scales: {
         x:  { ticks: { color: '#555580', font: { size: 10, family: 'Courier New' }, maxRotation: 45 }, grid: { color: '#181828' } },
-        y:  { position: 'left',  title: { display: true, text: 'Meteors / hr',   color: '#555580', font: { size: 11 } }, ticks: { color: '#555580' }, grid: { color: '#181828' }, min: 0 },
-        y2: { position: 'right', title: { display: true, text: 'Cloud % / AQI', color: '#555580', font: { size: 11 } }, ticks: { color: '#555580' }, grid: { display: false }, min: 0, max: 100 },
+        y:  { position: 'left',  title: { display: true, text: 'Meteors/hr', color: '#555580', font: { size: 11 } }, ticks: { color: '#555580' }, grid: { color: '#181828' }, min: 0 },
+        y2: { position: 'right', title: { display: true, text: 'Cloud% / AQI', color: '#555580', font: { size: 11 } }, ticks: { color: '#555580' }, grid: { display: false }, min: 0, max: 100 },
       },
     },
   });
@@ -325,7 +328,6 @@ function setStatus  (msg) { document.getElementById('status').textContent = msg;
 function showError  (msg) { const e = document.getElementById('error-msg'); e.textContent = msg; e.style.display = 'block'; }
 function clearError ()    { document.getElementById('error-msg').style.display = 'none'; }
 
-// Enter key on search box
 document.getElementById('location-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') searchLocation();
 });
