@@ -18,26 +18,22 @@
 
   <div class="panel">
     <div class="panel-title">Your Location</div>
-
     <div class="search-row">
       <input type="text" id="location-input" placeholder="Type your city, village, or address…" autocomplete="off">
       <button class="btn-ghost" onclick="searchLocation()">🔍 Search</button>
       <button class="btn-ghost" onclick="autoDetect()">📍 Auto</button>
     </div>
-
     <div class="coords-row" id="coords-row" style="display:none">
       <div class="coord-chip">Lat <span id="lat-display">—</span></div>
       <div class="coord-chip">Lon <span id="lon-display">—</span></div>
     </div>
-
     <div id="sky-panel">
-      <div class="sky-title">🛰️ Sky Darkness — detected from Falchi 2016 / VIIRS satellite</div>
+      <div class="sky-title">🛰️ Sky Darkness — Falchi 2016 / VIIRS satellite</div>
       <div class="sky-bortle" id="sky-bortle">—</div>
       <div class="sky-desc"   id="sky-desc">—</div>
       <div class="sky-source" id="sky-source">—</div>
       <div class="sky-error"  id="sky-error" style="display:none"></div>
     </div>
-
     <div class="btn-row">
       <button class="btn-primary" id="predict-btn" onclick="runPrediction()">Predict →</button>
       <span id="status"></span>
@@ -54,16 +50,16 @@
     <div class="empty">
       <div class="icon">🌌</div>
       <p>Search for your location — sky darkness auto-detected from satellite.<br>
-      We account for radiant geometry, light pollution (Falchi 2016 atlas),<br>
-      cloud cover, moon phase, and AQI.</p>
+      Accounts for radiant geometry, Falchi 2016 light pollution atlas,<br>
+      cloud cover, moon phase, and AQI. Zero API keys required.</p>
     </div>
   </div>
 
 </div>
 
 <footer>
-  Sky darkness: <a href="https://www.lightpollutionmap.info" target="_blank">Falchi 2016 / VIIRS via lightpollutionmap.info</a> &nbsp;|&nbsp;
-  Formula: ZHR_obs = ZHR × sin(alt) × r^(lm−6.5) × (1−cloud) — IMO Standard &nbsp;|&nbsp;
+  Geocoding: <a href="https://nominatim.openstreetmap.org" target="_blank">Nominatim / OpenStreetMap</a> &nbsp;|&nbsp;
+  Sky darkness: <a href="https://www.lightpollutionmap.info" target="_blank">Falchi 2016 / VIIRS</a> &nbsp;|&nbsp;
   Weather + AQI: <a href="https://open-meteo.com" target="_blank">Open-Meteo</a> &nbsp;|&nbsp;
   Showers: <a href="https://www.imo.net" target="_blank">IMO Working List</a> &nbsp;|&nbsp;
   "Space is big. Really big." — Douglas Adams
