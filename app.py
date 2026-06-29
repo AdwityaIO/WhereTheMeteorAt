@@ -5,79 +5,109 @@ Meteor Shower Predictor — Flask Backend
 — Napoleon Bonaparte (1769–1821)
 He was wrong. You always need the comet.
 
+Zero API keys required. All services used are free and open:
+  Nominatim (OpenStreetMap)  — geocoding (text → lat/lon)
+  Open-Meteo                 — cloud cover + precipitation forecast
+  Open-Meteo Air Quality     — European AQI (PM2.5)
+  lightpollutionmap.info     — VIIRS satellite Bortle detection
+
 Routes:
   GET  /              → serve index.html
-  GET  /api/geocode   → text location → lat/lon (Google Geocoding API)
-  POST /api/predict   → shower predictions (auto-detects Bortle from satellite)
-  POST /api/calendar  → .ics calendar file download
-
-Keys needed (.env file):
-  GOOGLE_API_KEY  → for /api/geocode only
-                    Enable "Geocoding API" in Google Cloud Console
-                    Free tier: 40,000 requests/month
-
-No key needed for:
-  - Open-Meteo (weather + AQI)
-  - lightpollutionmap.info (Bortle detection via VIIRS tiles)
+  GET  /api/geocode   → text query → { lat, lon, name, place_data }
+  POST /api/predict   → shower predictions for lat/lon
+  POST /api/calendar  → .ics calendar download
 """
 
-import os
 from flask import Flask, render_template, request, jsonify, Response
 from datetime import datetime, timedelta, timezone
 import requests
-from dotenv import load_dotenv
 
 from showers import METEOR_SHOWERS
 from astro import (
-    compute_visible_zhr,
-    moon_illumination,
     get_hourly_prediction,
-    radiant_altitude,
-    radiant_azimuth,
-    az_to_cardinal,
-    effective_limiting_magnitude,
     find_best_window,
 )
-from light_pollution import fetch_bortle
-
-load_dotenv()
+from light_pollution import fetch_bortle, estimate_from_place
 
 app = Flask(__name__)
 
-GOOGLE_API_KEY  = os.environ.get("GOOGLE_API_KEY", "")
+# ── API Endpoints ──────────────────────────────────────────────────────────────
+NOMINATIM_URL   = "https://nominatim.openstreetmap.org/search"
 FORECAST_URL    = "https://api.open-meteo.com/v1/forecast"
 AQI_URL         = "https://air-quality-api.open-meteo.com/v1/air-quality"
-GEOCODING_URL   = "https://maps.googleapis.com/maps/api/geocode/json"
 REQUEST_TIMEOUT = 10
 
+# Nominatim requires a descriptive User-Agent per their usage policy
+NOMINATIM_HEADERS = {
+    "User-Agent": "MeteorPredictor/1.0 (Hack Club Stardance 2026; educational project)",
+    "Accept-Language": "en",
+}
 
-# ── External Data Fetchers ─────────────────────────────────────────────────────
+
+# ── Fetchers ───────────────────────────────────────────────────────────────────
+
+def geocode(query: str) -> dict:
+    """
+    Convert a text location to coordinates using Nominatim (OpenStreetMap).
+    Free, no key required. Rate limit: 1 req/s — fine for interactive use.
+    Returns: { lat, lon, name, place_data }
+    Raises: ValueError if location not found, RequestException on network error.
+    """
+    resp = requests.get(NOMINATIM_URL, params={
+        "q":              query,
+        "format":         "json",
+        "limit":          1,
+        "addressdetails": 1,
+    }, headers=NOMINATIM_HEADERS, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+
+    results = resp.json()
+    if not results:
+        raise ValueError(f"Location not found: {query}")
+
+    r = results[0]
+    return {
+        "lat":        float(r["lat"]),
+        "lon":        float(r["lon"]),
+        "name":       r.get("display_name", query),
+        "place_data": {
+            "name":        r.get("name", ""),
+            "addresstype": r.get("addresstype", ""),
+            "type":        r.get("type", ""),
+            "importance":  r.get("importance", 0.3),
+            "display_name": r.get("display_name", ""),
+        },
+    }
+
 
 def fetch_weather(lat: float, lon: float) -> dict:
-    r = requests.get(FORECAST_URL, params={
+    """7-day hourly cloud cover + precipitation from Open-Meteo."""
+    resp = requests.get(FORECAST_URL, params={
         "latitude":      lat,
         "longitude":     lon,
-        "hourly":        "cloudcover,visibility,precipitation_probability",
+        "hourly":        "cloudcover,precipitation_probability",
         "forecast_days": 7,
         "timezone":      "auto",
     }, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    resp.raise_for_status()
+    return resp.json()
 
 
 def fetch_aqi(lat: float, lon: float) -> dict:
-    r = requests.get(AQI_URL, params={
+    """5-day hourly European AQI from Open-Meteo Air Quality."""
+    resp = requests.get(AQI_URL, params={
         "latitude":      lat,
         "longitude":     lon,
         "hourly":        "european_aqi,pm2_5",
         "forecast_days": 5,
         "timezone":      "auto",
     }, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    resp.raise_for_status()
+    return resp.json()
 
 
 def build_lookup(times: list, values: list) -> dict:
+    """Zip Open-Meteo timestamps with values, skipping None entries."""
     return {t: v for t, v in zip(times, values) if v is not None}
 
 
@@ -110,42 +140,25 @@ def index():
 
 
 @app.route("/api/geocode")
-def geocode():
+def api_geocode():
     """
-    Convert a location text query to lat/lon using Google Geocoding API.
     GET /api/geocode?q=Patna+Bihar
 
-    Returns: { "lat": float, "lon": float, "name": str }
-    Requires GOOGLE_API_KEY in .env
+    Converts a location text query to coordinates via Nominatim.
+    No API key required.
+    Returns: { lat, lon, name, place_data }
     """
     query = request.args.get("q", "").strip()
     if not query:
-        return jsonify({"error": "Missing query parameter ?q="}), 400
-
-    if not GOOGLE_API_KEY:
-        return jsonify({"error": "GOOGLE_API_KEY not set in .env file"}), 503
+        return jsonify({"error": "Missing ?q= parameter"}), 400
 
     try:
-        r = requests.get(GEOCODING_URL, params={
-            "address": query,
-            "key":     GOOGLE_API_KEY,
-        }, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-
-        if data.get("status") != "OK" or not data.get("results"):
-            return jsonify({"error": f"Location not found: {query}"}), 404
-
-        result   = data["results"][0]
-        location = result["geometry"]["location"]
-        name     = result["formatted_address"]
-
-        return jsonify({
-            "lat":  location["lat"],
-            "lon":  location["lng"],
-            "name": name,
-        })
-
+        result = geocode(query)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except requests.Timeout:
+        return jsonify({"error": "Geocoding timed out. Try again."}), 503
     except requests.RequestException as e:
         return jsonify({"error": f"Geocoding failed: {str(e)}"}), 503
 
@@ -153,13 +166,10 @@ def geocode():
 @app.route("/api/predict", methods=["POST"])
 def predict():
     """
-    Main prediction endpoint.
+    POST /api/predict
+    Body: { "lat": float, "lon": float, "place_data": dict (optional) }
 
-    Expects JSON: { "lat": float, "lon": float }
-    Bortle class is now auto-detected from satellite data — no longer a user input.
-
-    Returns JSON list of showers sorted by days until peak.
-    Each entry includes sky darkness data from Falchi 2016 / VIIRS satellite.
+    Returns shower predictions with auto-detected Bortle sky class.
     """
     body = request.get_json(force=True)
 
@@ -169,46 +179,53 @@ def predict():
     except (KeyError, ValueError, TypeError) as e:
         return jsonify({"error": f"Invalid input: {e}"}), 400
 
-    lat = max(-90.0,  min(90.0,  lat))
-    lon = max(-180.0, min(180.0, lon))
+    lat        = max(-90.0,  min(90.0,  lat))
+    lon        = max(-180.0, min(180.0, lon))
+    place_data = body.get("place_data")
 
-    # ── Step 1: Auto-detect sky darkness from satellite ────────────────────────
-    sky_data = fetch_bortle(lat, lon)
+    # ── Step 1: Sky darkness from satellite (with fallback) ────────────────────
+    sky_data = fetch_bortle(lat, lon, place_data)
     bortle   = sky_data["bortle"]
 
-    # ── Step 2: Fetch weather and AQI ─────────────────────────────────────────
+    # ── Step 2: Weather + AQI ──────────────────────────────────────────────────
     try:
         weather_raw = fetch_weather(lat, lon)
-        aqi_raw     = fetch_aqi(lat, lon)
     except requests.Timeout:
         return jsonify({"error": "Weather API timed out. Try again."}), 503
     except requests.RequestException as e:
-        return jsonify({"error": f"Failed to fetch forecast: {str(e)}"}), 503
+        return jsonify({"error": f"Weather fetch failed: {str(e)}"}), 503
+
+    try:
+        aqi_raw = fetch_aqi(lat, lon)
+    except Exception:
+        # AQI is non-critical — continue with empty data
+        aqi_raw = {"hourly": {"time": [], "european_aqi": []}}
 
     w_times      = weather_raw["hourly"]["time"]
     cloud_lookup = build_lookup(w_times, weather_raw["hourly"]["cloudcover"])
+    a_times      = aqi_raw["hourly"]["time"]
+    aqi_lookup   = build_lookup(a_times, aqi_raw["hourly"]["european_aqi"])
 
-    a_times    = aqi_raw["hourly"]["time"]
-    aqi_lookup = build_lookup(a_times, aqi_raw["hourly"]["european_aqi"])
-
-    # ── Step 3: Compute predictions for each shower ────────────────────────────
+    # ── Step 3: Compute shower predictions ────────────────────────────────────
     now     = datetime.now(timezone.utc)
     results = []
 
     for shower in METEOR_SHOWERS:
+        # Next peak date (roll to next year if already passed)
         peak_dt = datetime(now.year, shower["peak_month"], shower["peak_day"],
                            2, 0, 0, tzinfo=timezone.utc)
         if peak_dt < now - timedelta(days=1):
             peak_dt = datetime(now.year + 1, shower["peak_month"],
                                shower["peak_day"], 2, 0, 0, tzinfo=timezone.utc)
 
-        days_until_peak = (peak_dt - now).days
+        days_until = (peak_dt - now).days
 
         hourly      = get_hourly_prediction(shower, lat, lon, bortle,
                                              peak_dt, cloud_lookup, aqi_lookup)
         best        = max(hourly, key=lambda h: h["visible_zhr"])
         best_window = find_best_window(hourly)
 
+        # Current AQI for display
         now_ts      = now.strftime("%Y-%m-%dT%H:%M")
         current_aqi = aqi_lookup.get(now_ts)
         if current_aqi is None and aqi_lookup:
@@ -218,7 +235,7 @@ def predict():
             "name":              shower["name"],
             "code":              shower["code"],
             "peak_date":         peak_dt.strftime("%B %d, %Y"),
-            "days_until_peak":   days_until_peak,
+            "days_until_peak":   days_until,
             "max_zhr":           shower["zhr"],
             "best_visible_zhr":  round(best["visible_zhr"], 1),
             "best_hour":         best["hour_label"],
@@ -228,24 +245,16 @@ def predict():
             "parent_body":       shower["parent_body"],
             "speed_kmps":        shower["speed"],
             "notes":             shower["notes"],
-            "current_aqi":       round(current_aqi, 0) if current_aqi else None,
+            "current_aqi":       round(current_aqi, 0) if current_aqi is not None else None,
             "current_aqi_label": aqi_label(current_aqi),
             "rating":            rating_label(best["visible_zhr"]),
             "best_window":       best_window,
             "hourly_data":       hourly,
-            # Sky data from satellite
-            "sky": {
-                "bortle":      sky_data["bortle"],
-                "sqm":         sky_data["sqm"],
-                "description": sky_data["description"],
-                "source":      sky_data["source"],
-                "error":       sky_data.get("error"),
-            },
         })
 
+    # Sort: soonest peak first
     results.sort(key=lambda x: x["days_until_peak"] % 366)
 
-    # Include sky data at top level for display in UI
     return jsonify({
         "showers": results,
         "sky":     sky_data,
@@ -255,8 +264,10 @@ def predict():
 @app.route("/api/calendar", methods=["POST"])
 def calendar():
     """
-    Generate .ics calendar file for all shower peaks.
-    Expects JSON: { "showers": [...] }
+    POST /api/calendar
+    Body: { "showers": [...] }  — output from /api/predict
+
+    Returns an .ics file importable into Google Calendar, Apple Calendar, Outlook.
     """
     body    = request.get_json(force=True)
     showers = body.get("showers", [])
@@ -285,21 +296,15 @@ def calendar():
         if s.get("best_window"):
             w = s["best_window"]
             window_note = (f"\\nBest clear window: {w['start']} to {w['end']} "
-                           f"({w['duration_hrs']}h · avg {w['avg_zhr']} meteors/hr)")
-
-        sky_note = ""
-        if s.get("sky"):
-            sk = s["sky"]
-            sky_note = f"\\nSky darkness: Bortle {sk['bortle']} · SQM {sk['sqm']} · {sk['description']}"
+                           f"({w['duration_hrs']}h, avg {w['avg_zhr']} meteors/hr)")
 
         description = (
             f"Predicted: ~{s['best_visible_zhr']} meteors/hr from your location"
-            f"\\nFace direction: {s['face_dir']} ({s['face_az']}°)"
+            f"\\nFace direction: {s['face_dir']} ({s['face_az']}deg)"
             f"\\nTheoretical ZHR: {s['max_zhr']} (perfect conditions)"
             f"\\nParent body: {s['parent_body']}"
             f"{window_note}"
-            f"{sky_note}"
-            f"\\n\\nGenerated by Meteor Predictor (Hack Club Stardance 2026)"
+            f"\\nGenerated by Meteor Predictor (Hack Club Stardance 2026)"
         )
 
         lines += [
@@ -307,7 +312,7 @@ def calendar():
             f"UID:{s['code']}-{peak.year}-meteorpredictor@stardance",
             f"DTSTART:{dtstart.strftime('%Y%m%dT%H%M%SZ')}",
             f"DTEND:{dtend.strftime('%Y%m%dT%H%M%SZ')}",
-            f"SUMMARY:☄️ {s['name']} Peak ({s['code']}) — {s['rating']['text']}",
+            f"SUMMARY:comet {s['name']} Peak ({s['code']}) - {s['rating']['text']}",
             f"DESCRIPTION:{description}",
             "TRANSP:TRANSPARENT",
             "STATUS:CONFIRMED",
@@ -325,4 +330,4 @@ def calendar():
 
 if __name__ == "__main__":
     import os
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
