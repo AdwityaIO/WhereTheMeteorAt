@@ -1,4 +1,7 @@
 """
+Astronomical Calculations
+=========================
+Pure math. No external astronomy libraries. Every formula is cited.
 Primary: Jean Meeus, "Astronomical Algorithms" 2nd ed. (Willmann-Bell, 1998)
 Secondary: IMO Meteor Observation Manual v1.4; Schaefer B.E. (1990) PASP 102
 """
@@ -6,6 +9,9 @@ Secondary: IMO Meteor Observation Manual v1.4; Schaefer B.E. (1990) PASP 102
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+
+# ── Lookup Tables ──────────────────────────────────────────────────────────────
 
 BORTLE_TO_LM: dict[int, float] = {
     1: 7.8, 2: 7.3, 3: 6.8, 4: 6.3, 5: 5.8,

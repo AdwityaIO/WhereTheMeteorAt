@@ -1,36 +1,23 @@
 """
 Light Pollution Detection
 =========================
-Automatically determines your Bortle sky class from your coordinates using
-real satellite data — no guessing required from the user.
+Automatically determines Bortle sky class from coordinates using two methods
+in order of preference:
 
-Data source: lightpollutionmap.info
-  - Hosts the Falchi et al. (2016) light pollution atlas
-  - Tiles are derived from VIIRS (Visible Infrared Imaging Radiometer Suite)
-    satellite measurements — the same instrument on Suomi-NPP and NOAA-20
-  - Original paper: Falchi F. et al. (2016). "The new world atlas of artificial
-    night sky brightness." Science Advances 2(6). DOI: 10.1126/sciadv.1600377
+Method 1 — VIIRS Satellite Tiles (lightpollutionmap.info)
+  Real satellite data from the Falchi et al. (2016) light pollution atlas.
+  Fetches a PNG map tile, reads the pixel at the exact coordinates,
+  maps the color to a radiance value, then to a Bortle class.
+  Reference: Falchi F. et al. (2016). "The new world atlas of artificial
+  night sky brightness." Science Advances 2(6). DOI: 10.1126/sciadv.1600377
 
-Method:
-  1. Convert lat/lon to Web Mercator tile coordinates (OSM slippy map scheme)
-  2. Fetch the 256×256 PNG tile from lightpollutionmap.info
-  3. Extract the RGBA pixel at the exact sub-tile coordinates
-  4. Map pixel color → artificial sky radiance → SQM → Bortle class
+Method 2 — Nominatim Place-Type Estimate (fallback)
+  If tile fetch fails for any reason, estimates Bortle from the OSM place
+  type and importance score returned by the geocoding step.
+  Less precise but always available and requires no extra API call.
 
 Why tiles instead of the raw dataset?
   The Falchi .tif is ~1.6GB. Tiles are small PNGs served on demand.
-  The color ramp encodes the radiance value — we reverse it to get Bortle.
-
-Color ramp reference:
-  lightpollutionmap.info uses a logarithmic color scale where:
-  Black     → pristine dark sky  (< 0.25 μcd/m²)   → Bortle 1-2
-  Dark blue → rural dark         (0.25–1 μcd/m²)   → Bortle 3
-  Blue      → rural/suburban     (1–3 μcd/m²)      → Bortle 4
-  Cyan      → suburban           (3–9 μcd/m²)      → Bortle 5
-  Green     → bright suburban    (9–27 μcd/m²)     → Bortle 6
-  Yellow    → urban transition   (27–82 μcd/m²)    → Bortle 7
-  Orange    → city               (82–245 μcd/m²)   → Bortle 8
-  Red/White → inner city         (> 245 μcd/m²)    → Bortle 9
 """
 
 import math
@@ -41,31 +28,24 @@ from typing import Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-TILE_SIZE  = 256          # Standard OSM tile size in pixels
-ZOOM_LEVEL = 8            # Zoom 8 → ~1.2km resolution per pixel. Good enough.
+TILE_SIZE  = 256
+ZOOM_LEVEL = 8    # ~1.2 km resolution per pixel at this zoom
 TILE_URL   = "https://www.lightpollutionmap.info/tiles/viirs_2023/{z}/{x}/{y}.png"
 
-REQUEST_HEADERS = {
+TILE_HEADERS = {
     "Referer":    "https://www.lightpollutionmap.info/",
-    "User-Agent": "MeteorPredictor/1.0 (educational/non-commercial Hack Club project)",
+    "User-Agent": "MeteorPredictor/1.0 (educational Hack Club Stardance project)",
+    "Accept":     "image/png,image/*,*/*;q=0.8",
 }
 
-# SQM (Sky Quality Meter, mag/arcsec²) midpoints per Bortle class
-# Source: Cinzano P. et al. (2001); Schaefer B.E. (1990) cross-calibration
-BORTLE_TO_SQM = {
-    1: 21.8,   # Zodiacal band casts shadows
-    2: 21.5,   # Typical dark site
-    3: 21.0,   # Rural, light dome on horizon
-    4: 20.5,   # Rural/suburban transition
-    5: 19.5,   # Suburban, Milky Way washed out low
-    6: 18.5,   # Bright suburban
-    7: 17.5,   # Suburban/urban transition
-    8: 16.5,   # City
-    9: 15.5,   # Inner city
+# SQM midpoints per Bortle class
+# Source: Cinzano (2001); Schaefer (1990) cross-calibration
+BORTLE_TO_SQM: dict[int, float] = {
+    1: 21.8, 2: 21.5, 3: 21.0, 4: 20.5, 5: 19.5,
+    6: 18.5, 7: 17.5, 8: 16.5, 9: 15.5,
 }
 
-# Bortle class descriptions for the UI
-BORTLE_DESCRIPTIONS = {
+BORTLE_DESCRIPTIONS: dict[int, str] = {
     1: "Truly dark — zodiacal band casts shadows",
     2: "Dark site — M33 visible with direct vision",
     3: "Rural sky — light dome on horizon",
@@ -77,70 +57,83 @@ BORTLE_DESCRIPTIONS = {
     9: "Inner city — ~20 stars visible",
 }
 
+# Nominatim addresstype / place type → Bortle estimate
+# Based on typical population density of OSM place categories
+PLACE_TYPE_BORTLE: dict[str, int] = {
+    "city":                 8,
+    "town":                 6,
+    "suburb":               7,
+    "borough":              8,
+    "quarter":              7,
+    "neighbourhood":        7,
+    "village":              4,
+    "hamlet":               3,
+    "isolated_dwelling":    2,
+    "farm":                 2,
+    "locality":             3,
+    "municipality":         7,
+    "administrative":       6,
+    "county":               5,
+    "state":                5,
+    "country":              5,
+}
+
 
 # ── Tile Math ──────────────────────────────────────────────────────────────────
 
-def lat_lon_to_tile(lat: float, lon: float, zoom: int) -> tuple[int, int]:
+def _lat_lon_to_tile(lat: float, lon: float, zoom: int) -> tuple[int, int]:
     """
-    Convert geographic coordinates to OSM slippy map tile indices (x, y).
-
-    Web Mercator projection (EPSG:3857).
-    x increases eastward. y increases southward (top-left origin).
-    Formula: https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
-    """
-    n     = 2 ** zoom
-    tile_x = int((lon + 180.0) / 360.0 * n)
-    lat_r  = math.radians(lat)
-    tile_y = int((1.0 - math.asinh(math.tan(lat_r)) / math.pi) / 2.0 * n)
-    # Clamp to valid tile range
-    tile_x = max(0, min(n - 1, tile_x))
-    tile_y = max(0, min(n - 1, tile_y))
-    return tile_x, tile_y
-
-
-def pixel_in_tile(lat: float, lon: float, zoom: int,
-                   tile_x: int, tile_y: int) -> tuple[int, int]:
-    """
-    Get the pixel coordinates within a tile for a given lat/lon.
-    Returns (px, py) where 0 ≤ px, py < TILE_SIZE.
+    OSM slippy map tile indices from geographic coordinates.
+    Web Mercator (EPSG:3857).
+    https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames
     """
     n      = 2 ** zoom
+    tile_x = int((lon + 180.0) / 360.0 * n)
+    lat_r  = math.radians(max(-85.051, min(85.051, lat)))   # Mercator clamp
+    tile_y = int((1.0 - math.asinh(math.tan(lat_r)) / math.pi) / 2.0 * n)
+    return (max(0, min(n - 1, tile_x)),
+            max(0, min(n - 1, tile_y)))
+
+
+def _pixel_in_tile(lat: float, lon: float, zoom: int,
+                    tile_x: int, tile_y: int) -> tuple[int, int]:
+    """Pixel offset (px, py) within the tile for a given lat/lon."""
+    n      = 2 ** zoom
     x_frac = (lon + 180.0) / 360.0 * n
-    lat_r  = math.radians(lat)
+    lat_r  = math.radians(max(-85.051, min(85.051, lat)))
     y_frac = (1.0 - math.asinh(math.tan(lat_r)) / math.pi) / 2.0 * n
-
-    px = int((x_frac - tile_x) * TILE_SIZE)
-    py = int((y_frac - tile_y) * TILE_SIZE)
-
+    px     = int((x_frac - tile_x) * TILE_SIZE)
+    py     = int((y_frac - tile_y) * TILE_SIZE)
     return (max(0, min(TILE_SIZE - 1, px)),
             max(0, min(TILE_SIZE - 1, py)))
 
 
-# ── Pixel → Bortle Mapping ─────────────────────────────────────────────────────
+# ── Pixel → Bortle ─────────────────────────────────────────────────────────────
 
-def pixel_to_bortle(r: int, g: int, b: int, a: int) -> int:
+def _pixel_to_bortle(r: int, g: int, b: int, a: int) -> int:
     """
-    Map a tile pixel (RGBA) to a Bortle class.
+    Map a tile RGBA pixel to a Bortle class.
 
-    lightpollutionmap.info uses a logarithmic color ramp from black (dark)
-    through blue → cyan → green → yellow → orange → red/white (bright).
+    lightpollutionmap.info uses a logarithmic color ramp:
+      Black/transparent → pristine dark (Bortle 1-2)
+      Dark blue         → rural dark    (Bortle 3)
+      Blue              → rural/sub     (Bortle 4)
+      Cyan              → suburban      (Bortle 5)
+      Green             → bright sub    (Bortle 6)
+      Yellow            → urban trans   (Bortle 7)
+      Orange            → city          (Bortle 8)
+      Red/White         → inner city    (Bortle 9)
 
-    We use two signals:
-      1. Alpha channel: 0 = no data / ocean → assume Bortle 2 (dark)
-      2. Perceived luminance (weighted RGB): proxy for radiance level
-
-    The luminance thresholds are calibrated against known locations:
-      Atacama desert (~Bortle 1): luminance ~2
-      Rural France    (~Bortle 3): luminance ~35
-      London suburbs  (~Bortle 6): luminance ~110
-      Central London  (~Bortle 9): luminance ~220
+    Luminance thresholds calibrated against known locations:
+      Atacama desert (~B1): lum ~2
+      Rural France   (~B3): lum ~35
+      London suburbs (~B6): lum ~110
+      Central London (~B9): lum ~220
     """
-    # Transparent pixel = ocean or no data → very dark sky
-    if a < 10:
-        return 2
+    if a < 20:
+        return 2   # Transparent = ocean or no data → assume dark
 
-    # Perceptual luminance (ITU-R BT.601)
-    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    lum = 0.299 * r + 0.587 * g + 0.114 * b   # ITU-R BT.601 perceptual luminance
 
     if lum < 6:   return 1
     if lum < 18:  return 2
@@ -153,57 +146,115 @@ def pixel_to_bortle(r: int, g: int, b: int, a: int) -> int:
     return 9
 
 
-# ── Main Public Function ───────────────────────────────────────────────────────
-
-def fetch_bortle(lat: float, lon: float) -> dict:
-    """
-    Determine Bortle sky class from satellite data for a given location.
-
-    Returns dict:
-      {
-        "bortle":      int (1–9),
-        "sqm":         float (mag/arcsec²),
-        "description": str,
-        "source":      str,
-        "error":       str | None,
-      }
-
-    On failure (network error, tile not available), returns Bortle 5 as a
-    safe default with an error message — the app still works, just less precise.
-    """
-    fallback = {
-        "bortle":      5,
-        "sqm":         BORTLE_TO_SQM[5],
-        "description": BORTLE_DESCRIPTIONS[5],
-        "source":      "Default (satellite fetch failed)",
-        "error":       None,
+def _bortle_result(bortle: int, source: str, error: Optional[str] = None) -> dict:
+    """Build a standardised Bortle result dict."""
+    return {
+        "bortle":      bortle,
+        "sqm":         BORTLE_TO_SQM[bortle],
+        "description": BORTLE_DESCRIPTIONS[bortle],
+        "source":      source,
+        "error":       error,
     }
 
+
+# ── Method 1: VIIRS Tile ───────────────────────────────────────────────────────
+
+def _fetch_from_viirs(lat: float, lon: float) -> Optional[dict]:
+    """
+    Fetch Bortle class from lightpollutionmap.info VIIRS tile.
+    Returns result dict on success, None on any failure.
+    """
+    tile_x, tile_y = _lat_lon_to_tile(lat, lon, ZOOM_LEVEL)
+    px, py         = _pixel_in_tile(lat, lon, ZOOM_LEVEL, tile_x, tile_y)
+    url            = TILE_URL.format(z=ZOOM_LEVEL, x=tile_x, y=tile_y)
+
+    resp = requests.get(url, headers=TILE_HEADERS, timeout=8)
+    resp.raise_for_status()
+
+    # Verify we actually got an image
+    content_type = resp.headers.get("Content-Type", "")
+    if "image" not in content_type and len(resp.content) < 100:
+        return None
+
+    img        = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+    r, g, b, a = img.getpixel((px, py))
+    bortle     = _pixel_to_bortle(r, g, b, a)
+
+    return _bortle_result(
+        bortle,
+        source="Falchi 2016 / VIIRS satellite (lightpollutionmap.info)",
+    )
+
+
+# ── Method 2: Nominatim Place Estimate ────────────────────────────────────────
+
+def estimate_from_place(place_data: dict) -> dict:
+    """
+    Estimate Bortle from Nominatim geocoding result.
+    Uses addresstype and importance score as proxies for light pollution.
+    Always succeeds — worst case returns Bortle 5.
+    """
+    address_type = place_data.get("addresstype", "")
+    place_type   = place_data.get("type", "")
+    importance   = float(place_data.get("importance", 0.3) or 0.3)
+
+    # Try direct type match first
+    bortle = PLACE_TYPE_BORTLE.get(address_type) or PLACE_TYPE_BORTLE.get(place_type)
+
+    if bortle is None:
+        # Fall back to importance score (0=tiny hamlet, 1=major capital)
+        if importance >= 0.75:  bortle = 8
+        elif importance >= 0.55: bortle = 7
+        elif importance >= 0.40: bortle = 6
+        elif importance >= 0.25: bortle = 5
+        elif importance >= 0.12: bortle = 4
+        else:                    bortle = 3
+
+    place_name = place_data.get("name", "this location")
+    return _bortle_result(
+        bortle,
+        source=f"Estimated from place type '{address_type or place_type}' (OSM Nominatim)",
+        error=None,
+    )
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
+
+def fetch_bortle(lat: float, lon: float,
+                  place_data: Optional[dict] = None) -> dict:
+    """
+    Determine Bortle sky class for a location.
+
+    Tries VIIRS satellite tiles first. Falls back to place-type estimation
+    if tiles are unavailable. Falls back to Bortle 5 if everything fails.
+
+    Args:
+        lat, lon:   Observer coordinates
+        place_data: Nominatim result dict (optional, used as fallback)
+
+    Returns dict with keys: bortle, sqm, description, source, error
+    """
+    # Method 1: VIIRS satellite
     try:
-        tile_x, tile_y = lat_lon_to_tile(lat, lon, ZOOM_LEVEL)
-        px, py         = pixel_in_tile(lat, lon, ZOOM_LEVEL, tile_x, tile_y)
+        result = _fetch_from_viirs(lat, lon)
+        if result is not None:
+            return result
+    except requests.Timeout:
+        pass   # Tile server slow — fall through
+    except requests.HTTPError as e:
+        pass   # Tile not found or server error — fall through
+    except Exception:
+        pass   # Image decode or other error — fall through
 
-        url = TILE_URL.format(z=ZOOM_LEVEL, x=tile_x, y=tile_y)
-        resp = requests.get(url, headers=REQUEST_HEADERS, timeout=8)
-        resp.raise_for_status()
+    # Method 2: Nominatim place estimate
+    if place_data:
+        result = estimate_from_place(place_data)
+        result["error"] = "VIIRS tile unavailable — using location-type estimate"
+        return result
 
-        img  = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-        r, g, b, a = img.getpixel((px, py))
-
-        bortle = pixel_to_bortle(r, g, b, a)
-        sqm    = BORTLE_TO_SQM[bortle]
-
-        return {
-            "bortle":      bortle,
-            "sqm":         sqm,
-            "description": BORTLE_DESCRIPTIONS[bortle],
-            "source":      "Falchi 2016 / VIIRS satellite (lightpollutionmap.info)",
-            "error":       None,
-        }
-
-    except requests.RequestException as e:
-        fallback["error"] = f"Tile fetch failed: {str(e)}"
-        return fallback
-    except Exception as e:
-        fallback["error"] = f"Bortle detection failed: {str(e)}"
-        return fallback
+    # Method 3: Safe default
+    return _bortle_result(
+        5,
+        source="Default — sky darkness could not be determined",
+        error="Both VIIRS and place-based detection failed",
+    )
