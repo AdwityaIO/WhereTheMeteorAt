@@ -1,15 +1,17 @@
-# ☄️ Meteor Predictor
+ ☄️ Meteor Predictor
 
-> **This is not a meteor shower calendar.** Those already exist everywhere.  
-> This tells you how many meteors *you specifically* will see — from your rooftop, on the actual peak night, given your sky, your weather, and your air quality.
+
+>so basically this is not just a metoer calender ,it tells you the metoer trajectory (best viewing angle) ,visbilty according to proximity and best time of the day to watch the shower .
 
 ---
 
-## What it does
+## why is it important
 
-Most meteor shower apps show you the theoretical ZHR (Zenithal Hourly Rate) — the number you'd see if you were lying on a mountain in perfect darkness with no moon and no clouds. Nobody ever sees that number.
+\most of the metoer calander dont take in parameter like pollution ,aqi and and opaqe sky 
 
-This app computes your **actual visible ZHR** by combining:
+
+
+This app calculaates your **actual visible ZHR** by combining:
 
 - **Radiant geometry** — where the shower's origin point sits in *your* sky at *your* latitude
 - **Sky darkness** — auto-detected from the Falchi 2016 light pollution atlas via VIIRS satellite data, no input needed
