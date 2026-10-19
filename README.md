@@ -10,13 +10,13 @@ built for Hack Club Stardance 2026.
 
 ## how it works
 
-most apps show ZHR — a number that assumes you're on a dark mountain with perfect skies. nobody ever sees that. this app runs the IMO standard formula:
+most meteor scanner show ZHR . It that assumes you're on a dark mountain with perfect skies. nobody ever has a perfect sky. this app runs the IMO standard formula:
 
 ```
 ZHR_visible = ZHR × sin(radiant_altitude) × r^(lm − 6.5) × (1 − cloud_fraction)
 ```
 
-sky darkness is pulled automatically from the Falchi 2016 light pollution atlas via VIIRS satellite data. no manual input needed.
+sky darkness is pulled automatically from the Falchi 2016 light pollution atlas via VIIRS satellite data. no manual input needed.(the last survey which was publicly available and correct ) 
 
 ---
 
@@ -29,15 +29,15 @@ pip install flask requests Pillow
 python app.py
 ```
 
-then open `http://localhost:5000`, type your city, hit predict.
+then open `http://localhost:5000`, type your city or use locate option, press predict.
 
 ---
 
-## deploy to vercel
+## to deploy to vercel
 
 1. push code to github
 2. go to vercel.com, connect your repo, hit deploy
-3. done — live url in about a minute
+3. done 
 
 the `vercel.json` is already in the project so vercel knows what to do.
 
@@ -51,10 +51,9 @@ the `vercel.json` is already in the project so vercel knows what to do.
 - geocoding — [Nominatim / OpenStreetMap](https://nominatim.openstreetmap.org)
 - math — Meeus, *Astronomical Algorithms* (1998)
 
-zero API keys required.
-
 ---
 
 ## ai usage
 
-built with Claude (Anthropic) as a coding tool. concept, features, and direction were my own.
+built with Claude (Anthropic) as a coding tool for debugging.
+
