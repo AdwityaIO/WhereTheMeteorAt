@@ -244,3 +244,64 @@ footer a:hover { color: var(--ink); }
   .footer-eq { text-align: left; }
   .empty-state { padding: 40px 24px; }
 }
+
+.info-container {
+  display: flex;
+  gap: 0;
+  justify-content: flex-start;
+  margin-top: 40px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.info-card {
+  width: 150px;
+  padding: 14px 16px;
+  background-color: transparent;
+  border-radius: 0;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  border-right: 1px solid var(--rule);
+  border-left: none;
+  border-top: 3px solid transparent;
+  border-bottom: none;
+}
+
+.info-card img {
+  width: 100%;
+  border-radius: 0;
+  filter: grayscale(30%);
+  transition: filter 0.2s;
+}
+
+.info-card:hover,
+.info-card.selected {
+  transform: translateY(-3px);
+  background-color: rgba(13, 13, 13, 0.04);
+  border-top-color: var(--signal);
+}
+
+.info-card:hover img,
+.info-card.selected img {
+  filter: grayscale(0%);
+}
+
+
+@keyframes pulseGlow {
+  0% {
+    border-top-color: var(--signal);
+  }
+
+  50% {
+    border-top-color: transparent;
+  }
+
+  100% {
+    border-top-color: var(--signal);
+  }
+}
+
+.info-card.selected {
+  animation: pulseGlow 1.8s ease-in-out infinite;
+}
