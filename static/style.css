@@ -305,3 +305,22 @@ footer a:hover { color: var(--ink); }
 .info-card.selected {
   animation: pulseGlow 1.8s ease-in-out infinite;
 }
+
+.nav{
+  border-bottom:1px solid var(--rule);
+  padding:10px 40px; display:flex;
+  gap:24px
+}
+
+.page{
+  font-size:11px;
+  color:var(--dim);
+  font-family:var(--fd);
+}
+
+.nav-link{
+  font-size: 11px;
+  color: var(--signal);
+  font-family: var(--fd);
+  text-decoration: none;
+}

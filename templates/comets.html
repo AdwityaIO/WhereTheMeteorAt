@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meteor Info</title>
+  <link rel="preconnect" href="https://googleapis.com">
+  <link rel="preconnect" href="https://gstatic.com" crossorigin>
+  <link href="https://googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  
+  <!-- Chart.js for data visualization -->
+  <script src="https://cloudflare.com"></script>
+  
+  <!-- CSS Stylesheet (assuming style.css is one folder up under static) -->
+  <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="masthead-left">
+      <div class="mast-sub">Optical observation forecast / IMO standard formula</div>
+      <h1>METEOR<br><em>Information</em></h1>
+    </div>
+    <div class="masthead-right">
+      <p></p>
+    </div>
+  </header>
+
+  <nav class="nav">
+    <span class="page">Pages</span>
+    <a href="/" class="nav-link">Predictor</a>
+    <a href="/comets" class="nav-link">Comets</a>
+  </nav>
+
+  <!-- Interactive Grid Cards Container -->
+  <div class="info-container">
+    <div class="info-card" data-card="Orionids">
+        <h3>Orionids</h3>
+    </div>
+    <div class="info-card" data-card="Leonids">
+        <h3>Leonids</h3>
+    </div>
+    <div class="info-card" data-card="Geminids">
+        <h3>Geminids</h3>
+    </div>
+    <div class="info-card" data-card="Ursids">
+        <h3>Ursids</h3>
+    </div>
+    <div class="info-card" data-card="Quadrantids">
+        <h3>Quadrantids</h3>
+    </div>
+    <div class="info-card" data-card="Lyrids">
+        <h3>Lyrids</h3>
+    </div>
+    <div class="info-card" data-card="Eta Aquariids">
+        <h3>Eta Aquariids</h3>
+    </div>
+    <div class="info-card" data-card="Delta Aquariids">
+        <h3>Delta Aquariids</h3>
+    </div>
+    <div class="info-card" data-card="Perseids">
+        <h3>Perseids</h3>
+    </div>
+  </div>
+
+  <!-- Selection Display & Graphical Preview Panels -->
+  <div id="selection-display">
+    <div class="preview-layout">
+      <div class="text-panel">
+        <h2 id="preview-title">Select a meteor shower above</h2>
+        
+        <div id="preview-details" style="display: none; margin-top: 15px; font-family: 'JetBrains Mono', sans-serif; line-height: 1.8;">
+          <p><strong>✨ Peak Date:</strong> <span id="meteor-peak">-</span></p>
+          <p><strong>📊 Zenithal Hourly Rate (ZHR):</strong> <span id="meteor-zhr">-</span> meteors/hr</p>
+          <p><strong>☄️ Parent Body:</strong> <span id="meteor-origin">-</span></p>
+          <p><strong>🎯 Radiant Constellation:</strong> <span id="meteor-radiant">-</span></p>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #888;"><span id="meteor-desc"></span></p>
+        </div>
+      </div>
+      
+      <!-- Chart wrapper to keep the layout responsive -->
+      <div class="chart-panel" style="max-width: 300px; margin: 20px auto;">
+        <canvas id="meteorChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connected Script Element (Same Directory Folder) -->
+  <script src="../static/info.js"></script>
+</body>
+</html>
